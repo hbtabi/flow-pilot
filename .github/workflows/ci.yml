@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: pytest -q
+      - name: Validate and dry-run the example workflows (mock mode, offline)
+        run: |
+          flow-pilot --no-color validate examples
+          flow-pilot --no-color run examples/lead_triage.yml -i name="Ada Lovelace" -i email=ada@example.com -i message="budget approved"
+          flow-pilot --no-color run examples/daily_digest.yml
+          flow-pilot --no-color run examples/support_autoreply.yml -i ticket="I was charged twice!"
+          flow-pilot --no-color runs
