@@ -1,0 +1,63 @@
+name: lead-triage
+description: Score an inbound lead with an LLM, enrich it, ping sales for hot leads and draft a personal reply.
+
+trigger:
+  type: webhook
+  path: /hooks/lead
+
+inputs:
+  name: { required: true }
+  email: { required: true }
+  company: { default: "unknown" }
+  message: { required: true }
+
+steps:
+  - id: score
+    type: llm
+    json: true
+    system: You are a B2B sales assistant. Reply with JSON only.
+    prompt: |
+      Score this inbound lead as hot, warm or cold and give a one-sentence reason.
+      Return {"score": "...", "reason": "..."}.
+      Name: {{ inputs.name }} ({{ inputs.company }})
+      Message: {{ inputs.message }}
+    # Offline mock: a tiny rule so the demo behaves sensibly without an API key.
+    mock:
+      score: "{{ 'hot' if ('budget' in inputs.message|lower or 'asap' in inputs.message|lower) else 'warm' }}"
+      reason: "Mentions {{ 'budget/timeline' if 'budget' in inputs.message|lower else 'general interest' }}"
+
+  - id: enrich
+    type: http
+    method: GET
+    url: "https://api.example.com/companies?domain={{ inputs.email.split('@')[-1] }}"
+    retries: 2
+    on_error: continue
+    mock:
+      status: 200
+      json: { employees: 42, industry: "Logistics", country: "UK" }
+
+  - id: notify_sales
+    type: webhook
+    when: "{{ steps.score.output.score == 'hot' }}"
+    url: "{{ env.get('SLACK_WEBHOOK_URL', 'https://hooks.example.com/sales') }}"
+    json:
+      text: "🔥 Hot lead: {{ inputs.name }} at {{ inputs.company }} ({{ steps.enrich.output.json.employees }} staff). {{ steps.score.output.reason }}"
+
+  - id: reply
+    type: email_draft
+    to: "{{ inputs.email }}"
+    subject: "Re: your enquiry, {{ inputs.name.split()[0] }}"
+    body: |
+      Hi {{ inputs.name.split()[0] }},
+
+      Thanks for getting in touch about {{ inputs.company }}.
+      {% if steps.score.output.score == 'hot' %}I'd love to set up a call this week. Does Thursday at 2pm work?{% else %}I've attached a short overview; happy to answer any questions.{% endif %}
+
+      Best,
+      Hasaan
+
+output:
+  lead: "{{ inputs.name }}"
+  score: "{{ steps.score.output.score }}"
+  sales_notified: "{{ steps.notify_sales.status == 'ok' }}"
+  draft: "{{ steps.reply.output.path }}"

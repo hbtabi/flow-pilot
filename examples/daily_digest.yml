@@ -1,0 +1,48 @@
+name: daily-digest
+description: Every day, fetch the latest posts from a JSON feed, summarise them with an LLM and draft a digest email to myself.
+
+trigger:
+  type: schedule
+  every: 1d
+
+inputs:
+  feed_url: { default: "https://api.example.com/feed.json" }
+  me: { default: "me@example.com" }
+
+steps:
+  - id: fetch
+    type: http
+    url: "{{ inputs.feed_url }}"
+    expect_status: 200
+    mock:
+      status: 200
+      json:
+        items:
+          - { title: "Diffusion models explained with 2D toys", url: "https://example.com/a" }
+          - { title: "Isolation forests for security logs", url: "https://example.com/b" }
+          - { title: "Why your CI should scan its own workflows", url: "https://example.com/c" }
+
+  - id: pick
+    type: transform
+    value: "{{ steps.fetch.output.json['items'][:5] }}"
+
+  - id: summarise
+    type: llm
+    prompt: |
+      Write a 3-bullet digest (max 20 words each) of these posts for a busy AI developer:
+      {% for it in steps.pick.output %}- {{ it.title }} ({{ it.url }})
+      {% endfor %}
+    mock: |
+      • {{ steps.pick.output[0].title }}: a gentle intro worth 10 minutes.
+      • {{ steps.pick.output[1].title }}: practical anomaly detection.
+      • {{ steps.pick.output[2].title }}: cheap supply-chain win.
+
+  - id: draft
+    type: email_draft
+    to: "{{ inputs.me }}"
+    subject: "Your digest for {{ run.started_at[:10] }}"
+    body: "{{ steps.summarise.output }}"
+
+output:
+  posts: "{{ steps.pick.output | length }}"
+  draft: "{{ steps.draft.output.path }}"

@@ -1,0 +1,47 @@
+name: support-autoreply
+description: Classify a support ticket, escalate angry customers, and draft a reply for a human to review.
+
+trigger: manual
+
+inputs:
+  customer: { default: "Sam" }
+  email: { default: "sam@example.com" }
+  ticket: { required: true }
+
+steps:
+  - id: triage
+    type: llm
+    json: true
+    prompt: |
+      Classify the ticket. Return JSON {"category": billing|bug|how-to|other, "sentiment": angry|neutral|happy}.
+      Ticket: {{ inputs.ticket }}
+    mock:
+      category: "{{ 'billing' if 'charge' in inputs.ticket|lower or 'refund' in inputs.ticket|lower else 'how-to' }}"
+      sentiment: "{{ 'angry' if ('!' in inputs.ticket or 'unacceptable' in inputs.ticket|lower) else 'neutral' }}"
+
+  - id: escalate
+    type: webhook
+    when: "{{ steps.triage.output.sentiment == 'angry' }}"
+    url: "{{ env.get('ESCALATION_WEBHOOK_URL', 'https://hooks.example.com/escalations') }}"
+    json: { customer: "{{ inputs.customer }}", category: "{{ steps.triage.output.category }}", ticket: "{{ inputs.ticket }}" }
+
+  - id: answer
+    type: llm
+    prompt: |
+      Draft a short, warm reply to {{ inputs.customer }} about this {{ steps.triage.output.category }} ticket:
+      "{{ inputs.ticket }}". Don't promise refunds; say a teammate will confirm.
+    mock: |
+      Hi {{ inputs.customer }}, thanks for flagging this, and sorry for the hassle. I've passed your {{ steps.triage.output.category }} question
+      to the right teammate, who will confirm the next steps today.
+
+  - id: draft
+    type: email_draft
+    to: "{{ inputs.email }}"
+    subject: "Re: your {{ steps.triage.output.category }} request"
+    body: "{{ steps.answer.output }}\n\nBest,\nThe Support Team"
+
+  - id: audit
+    type: log
+    message: "ticket from {{ inputs.customer }} -> {{ steps.triage.output.category }}/{{ steps.triage.output.sentiment }}, escalated={{ steps.escalate.status == 'ok' }}"
+
+output: "{{ steps.audit.output }}"
